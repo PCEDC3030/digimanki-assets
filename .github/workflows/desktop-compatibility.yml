@@ -18,7 +18,7 @@ jobs:
       QT_QPA_PLATFORM: offscreen
       PYTHONUTF8: '1'
     steps:
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
       - name: Install Anki Desktop and its Qt 6 runtime
@@ -26,7 +26,7 @@ jobs:
       - name: Install the published add-on and click Download
         shell: python
         run: |
-          import importlib, io, json, sys, time
+          import importlib, io, json, sys, time, weakref
           from pathlib import Path
           from zipfile import ZipFile
           import aqt
@@ -47,7 +47,11 @@ jobs:
           print('Testing AnkiWeb release', manifest['human_version'], flush=True)
           sys.path.insert(0, str(addon.parent))
           ui = importlib.import_module('746553245.digimanki_art_ui')
-          window = QMainWindow()
+          class GraphicsWindow(QMainWindow):
+              def weakref(self):
+                  return weakref.ref(self)
+
+          window = GraphicsWindow()
           window.taskman = TaskManager(window)
           ui.mw = window
           dialog = ui._GraphicsDialog(window)
