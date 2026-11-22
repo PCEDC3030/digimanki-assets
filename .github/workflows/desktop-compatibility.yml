@@ -1,0 +1,87 @@
+name: DigimAnki desktop compatibility
+on:
+  push:
+    branches: [qa/desktop-compatibility]
+    paths: ['.github/workflows/desktop-compatibility.yml']
+  workflow_dispatch:
+permissions: {}
+jobs:
+  graphics:
+    name: Graphics on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install Anki Desktop and its Qt 6 runtime
+        run: python -m pip install "aqt[qt]==26.9.3"
+      - name: Install the published add-on and click Download
+        shell: python
+        run: |
+          import importlib, io, json, sys, time
+          from pathlib import Path
+          from zipfile import ZipFile
+          import aqt
+          from anki.httpclient import HttpClient
+          from aqt.addons import DownloadOk, download_addon
+          from aqt.qt import QApplication, QMainWindow
+          from aqt.taskman import TaskManager
+
+          app = QApplication([])
+          with HttpClient() as client:
+              release = download_addon(client, 746553245)
+          assert isinstance(release, DownloadOk), repr(release)
+          profile = Path('Anki 2 - prueba').resolve()
+          addon = profile / 'addons21' / '746553245'
+          with ZipFile(io.BytesIO(release.data)) as archive:
+              archive.extractall(addon)
+          manifest = json.loads((addon / 'manifest.json').read_text(encoding='utf-8'))
+          print('Testing AnkiWeb release', manifest['human_version'], flush=True)
+          sys.path.insert(0, str(addon.parent))
+          ui = importlib.import_module('746553245.digimanki_art_ui')
+          window = QMainWindow()
+          window.taskman = TaskManager(window)
+          ui.mw = window
+          dialog = ui._GraphicsDialog(window)
+          dialog.show_options()
+          assert not ui.store.is_installed(addon)
+          dialog.show()
+          dialog.download.click()
+          deadline = time.monotonic() + 300
+          while dialog.working and time.monotonic() < deadline:
+              app.processEvents()
+              time.sleep(0.02)
+          assert not dialog.working, 'Download timed out'
+          assert ui.store.is_installed(addon), dialog.status.text()
+          print('Download, SHA-256 verification and installation passed', flush=True)
+      - name: Reopen and read the installed frames offline
+        shell: python
+        run: |
+          import importlib, json, socket, sys
+          from pathlib import Path
+          from unittest.mock import patch
+          from aqt.qt import QApplication, QImage
+
+          app = QApplication([])
+          addon = Path('Anki 2 - prueba/addons21/746553245').resolve()
+          sys.path.insert(0, str(addon.parent))
+          store = importlib.import_module('746553245.digimanki_art_store')
+          with patch.object(socket, 'getaddrinfo', side_effect=AssertionError('unexpected network access')), patch.object(socket.socket, 'connect', side_effect=AssertionError('unexpected network access')):
+              assert store.is_installed(addon)
+              assets = store.download_and_install(addon)
+              assert assets == store.active_root(addon)
+              catalogue = json.loads((assets / 'registry.json').read_text(encoding='utf-8'))
+              frames = list(assets.rglob('*.webp'))
+              assert len(frames) == catalogue['total_frames'] == 3800
+              assert len(catalogue['creatures']) == 475
+              for frame in frames:
+                  assert not QImage(str(frame)).isNull(), frame
+          print('Offline restart and Qt decoding passed for all 3,800 frames.')
